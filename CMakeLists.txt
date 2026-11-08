@@ -1,0 +1,58 @@
+cmake_minimum_required(VERSION 3.16)
+project(cam_demo CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE RelWithDebInfo)
+endif()
+add_compile_options(-Wall -Wextra)
+
+find_package(Threads REQUIRED)
+include_directories(${CMAKE_SOURCE_DIR}/include)
+
+# 1) 模拟采集：无需相机，任何 Linux 都能编译运行
+add_executable(sim_capture src/sim_capture.cpp)
+target_link_libraries(sim_capture Threads::Threads)
+
+# 2) Aravis 版：检测到 aravis-0.8 才编译
+find_package(PkgConfig)
+if(PkgConfig_FOUND)
+  pkg_check_modules(ARAVIS IMPORTED_TARGET aravis-0.8)
+endif()
+if(ARAVIS_FOUND)
+  add_executable(aravis_capture src/aravis_capture.cpp)
+  target_link_libraries(aravis_capture PkgConfig::ARAVIS Threads::Threads)
+  message(STATUS "Aravis found: build aravis_capture")
+else()
+  message(STATUS "Aravis not found: skip aravis_capture (sudo apt install libaravis-dev)")
+endif()
+
+# 3) 海康 MVS 版：检测到 /opt/MVS 才编译
+set(MVS_ROOT "/opt/MVS" CACHE PATH "Hikrobot MVS SDK root")
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
+  set(MVS_LIBDIR ${MVS_ROOT}/lib/aarch64)
+else()
+  set(MVS_LIBDIR ${MVS_ROOT}/lib/64)
+endif()
+if(EXISTS ${MVS_ROOT}/include/MvCameraControl.h)
+  add_executable(mvs_capture src/mvs_capture.cpp)
+  target_include_directories(mvs_capture PRIVATE ${MVS_ROOT}/include)
+  target_link_directories(mvs_capture PRIVATE ${MVS_LIBDIR})
+  target_link_libraries(mvs_capture MvCameraControl Threads::Threads)
+  set_target_properties(mvs_capture PROPERTIES BUILD_RPATH ${MVS_LIBDIR})
+  message(STATUS "MVS SDK found: build mvs_capture")
+else()
+  message(STATUS "MVS SDK not found at ${MVS_ROOT}: skip mvs_capture")
+endif()
+
+# 4) OpenCV 版：读普通 USB 摄像头（UVC），检测到 OpenCV 才编译
+find_package(OpenCV QUIET COMPONENTS core imgproc videoio highgui)
+if(OpenCV_FOUND)
+  add_executable(uvc_capture src/uvc_capture.cpp)
+  target_include_directories(uvc_capture PRIVATE ${OpenCV_INCLUDE_DIRS})
+  target_link_libraries(uvc_capture ${OpenCV_LIBS} Threads::Threads)
+  message(STATUS "OpenCV ${OpenCV_VERSION} found: build uvc_capture")
+else()
+  message(STATUS "OpenCV not found: skip uvc_capture (sudo apt install libopencv-dev)")
+endif()

@@ -1,0 +1,20 @@
+# 编译输出
+build/
+build-*/
+# 录像和导出的帧
+*.bin
+rec/
+rec_*/
+*.pgm
+*.ppm
+# Python
+__pycache__/
+*.pyc
+.venv/
+# Windows 复制文件时附带的元数据
+*:Zone.Identifier
+# 本地环境
+.env
+# 由 Markdown 生成的打印版，只放本地
+docs/*.docx
+docs/*.pdf
