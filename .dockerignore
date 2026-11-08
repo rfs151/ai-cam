@@ -1,0 +1,8 @@
+build/
+build-*/
+docs/
+.vscode/
+.git/
+**/__pycache__/
+*.bin
+rec/

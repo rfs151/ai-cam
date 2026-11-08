@@ -3,7 +3,10 @@
 
 用法: python3 verify_record.py rec_0000.bin [rec_0001.bin ...]
       python3 verify_record.py --dump 100 rec_0000.bin   # 导出帧号 100：Mono8 存 PGM，RGB8 存 PPM
+      python3 verify_record.py --json rec_0000.bin       # 结果输出为一行 JSON
 """
+import json
+import os
 import struct
 import sys
 import zlib
@@ -49,6 +52,8 @@ def iter_frames(path):
 
 def main(argv):
     dump_id = None
+    as_json = "--json" in argv          # 输出一行 JSON（网页演示后端调用）
+    argv = [a for a in argv if a != "--json"]
     if len(argv) > 2 and argv[1] == "--dump":
         dump_id = int(argv[2])
         argv = argv[2:]
@@ -59,12 +64,14 @@ def main(argv):
 
     total = crc_err = gaps = missing = 0
     last_id = last_dts = last_hts = None
-    intervals, host_intervals, latency = [], [], []
+    intervals, host_intervals, latency, problems = [], [], [], []
 
     for path in files:
         for status, hdr, data in iter_frames(path):
             if status != "ok":
-                print(f"[{path}] {status}")
+                problems.append(f"{os.path.basename(path)}: {status}")
+                if not as_json:
+                    print(f"[{path}] {status}")
                 continue
             total += 1
             if zlib.crc32(data) & 0xFFFFFFFF != hdr["crc"]:
@@ -93,18 +100,27 @@ def main(argv):
                     o.write(data[: hdr["w"] * hdr["h"] * (3 if rgb else 1)])
                 print(f"dumped {out}")
 
-    print(f"frames={total} crc_errors={crc_err} id_gaps={gaps} missing~{missing}")
     # 优先用相机时间戳算帧间隔；相机不给时间戳时退回主机接收时间
-    label = "frame interval ms"
+    label, clock = "frame interval ms", "camera"
     if not intervals and host_intervals:
-        intervals, label = host_intervals, "frame interval ms (host time, camera has no timestamp)"
+        intervals, label, clock = host_intervals, "frame interval ms (host time, camera has no timestamp)", "host"
+    intervals.sort()
+    latency.sort()
+    p = lambda v, q: v[min(len(v) - 1, int(q * len(v)))]
+    if as_json:
+        out = {"files": [os.path.basename(f) for f in files], "bytes": sum(os.path.getsize(f) for f in files),
+               "frames": total, "crc_errors": crc_err, "id_gaps": gaps, "missing": missing,
+               "problems": problems}
+        if intervals:
+            out["interval_ms"] = {"clock": clock, "min": round(intervals[0], 3), "p50": round(p(intervals, 0.5), 3),
+                                  "p99": round(p(intervals, 0.99), 3), "max": round(intervals[-1], 3)}
+        print(json.dumps(out, ensure_ascii=False))
+        return 0 if crc_err == 0 else 2
+    print(f"frames={total} crc_errors={crc_err} id_gaps={gaps} missing~{missing}")
     if intervals:
-        intervals.sort()
-        p = lambda q: intervals[min(len(intervals) - 1, int(q * len(intervals)))]
-        print(f"{label}: min={intervals[0]:.2f} p50={p(0.5):.2f} "
-              f"p99={p(0.99):.2f} max={intervals[-1]:.2f}")
+        print(f"{label}: min={intervals[0]:.2f} p50={p(intervals, 0.5):.2f} "
+              f"p99={p(intervals, 0.99):.2f} max={intervals[-1]:.2f}")
     if latency:
-        latency.sort()
         print(f"dev->host latency ms (同一时钟才有意义): p50={latency[len(latency)//2]:.3f} "
               f"max={latency[-1]:.3f}")
     return 0 if crc_err == 0 else 2

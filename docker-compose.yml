@@ -1,0 +1,19 @@
+# ai-cam 网页演示：http://127.0.0.1:8098
+#   docker compose up -d --build        （或 ./ctl.sh start）
+# 国内网络在 .env 里设置 REGISTRY=docker.1ms.run、APT_MIRROR=http://mirrors.aliyun.com
+services:
+  cam:
+    build:
+      context: .
+      network: host
+      args:
+        REGISTRY: "${REGISTRY:-docker.io}"
+        APT_MIRROR: "${APT_MIRROR:-}"
+    image: ai-cam:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${PORT:-8098}:8098"
+    # 录像只放内存盘：每段最长 10 秒，最多保留 3 段
+    tmpfs:
+      - /tmp/ai-cam-rec:size=1g
+    # 不用 host 网络：容器自己的 eth0 用来挂第二台虚拟相机 GV02，不影响宿主机网络

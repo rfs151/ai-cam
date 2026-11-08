@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ai-cam · 工业相机采集演示</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231e6fd9'/%3E%3Crect x='6' y='10' width='15' height='12' rx='2' fill='none' stroke='%23fff' stroke-width='2.4'/%3E%3Cpath d='M21 14l5-3v10l-5-3' fill='none' stroke='%23fff' stroke-width='2.4' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <h1>ai-cam <span>工业相机采集演示</span></h1>
+    <p>虚拟 GigE Vision 相机 → C++ 采集引擎 → 帧池 / 队列 / 写盘。注入丢包、拔网线、慢磁盘，看每一层怎么丢帧。</p>
+  </div>
+  <div class="ctl">
+    <span class="viewers" id="viewers">0 人在看</span>
+    <span class="conn" id="conn" data-s="down"><i></i><b>未连接</b></span>
+    <button id="btnControl" class="primary">获取控制权</button>
+    <a class="ghost" href="https://github.com/rfs151/ai-cam" target="_blank" rel="noopener">源码</a>
+  </div>
+</header>
+<div class="banner" id="banner" hidden></div>
+
+<main class="grid">
+  <!-- 左：相机与参数 -->
+  <section class="col">
+    <div class="panel">
+      <div class="ph"><h2>① 枚举相机</h2><button id="btnList" class="small" data-ctl>重新枚举</button></div>
+      <p class="hint">GVCP 广播发现（UDP 3956）。两台都是 Aravis 虚拟 GigE 相机，分别在回环和 eth0 网卡上。</p>
+      <ul class="cams" id="cams"></ul>
+    </div>
+
+    <div class="panel">
+      <div class="ph"><h2>② 参数</h2></div>
+      <div class="form">
+        <label for="pPixfmt">像素格式</label>
+        <select id="pPixfmt" data-ctl data-key="pixfmt"></select>
+        <label for="pSize">分辨率</label>
+        <select id="pSize" data-ctl data-key="size">
+          <option>512x512</option><option>1024x512</option><option>1024x1024</option><option>2048x2048</option>
+        </select>
+        <label for="pExposure">曝光 μs</label>
+        <input id="pExposure" type="number" min="10" max="1000000" step="100" data-ctl data-key="exposure">
+        <label for="pFps">帧率 fps</label>
+        <input id="pFps" type="number" min="1" max="120" step="1" data-ctl data-key="fps">
+        <label for="pTrigger">触发</label>
+        <select id="pTrigger" data-ctl data-key="trigger">
+          <option value="none">连续采集</option><option value="soft">软触发</option>
+        </select>
+        <label for="pAuto">自动软触发</label>
+        <select id="pAuto" data-ctl data-key="auto_trigger">
+          <option value="0">关</option><option value="100">每 100 ms</option><option value="250">每 250 ms</option><option value="1000">每 1 s</option>
+        </select>
+        <label for="pPacket">包大小</label>
+        <select id="pPacket" data-ctl data-key="packet_size">
+          <option value="1400">1400（标准 MTU）</option><option value="4000">4000</option><option value="8000">8000（巨帧）</option>
+        </select>
+        <label for="pBuffers">SDK 缓冲</label>
+        <select id="pBuffers" data-ctl data-key="buffers">
+          <option value="2">2 块</option><option value="4">4 块</option><option value="16">16 块</option><option value="32">32 块</option>
+        </select>
+      </div>
+      <dl class="info" id="info"></dl>
+    </div>
+
+    <div class="panel">
+      <div class="ph"><h2>③ 采集与录像</h2></div>
+      <div class="row">
+        <button id="btnStart" data-ctl class="primary">开始采集</button>
+        <button id="btnStop" data-ctl>停止</button>
+        <button id="btnTrigger" data-ctl>触发一次</button>
+      </div>
+      <div class="row">
+        <select id="recSecs" data-ctl aria-label="录像时长"><option value="3">3 秒</option><option value="5" selected>5 秒</option><option value="10">10 秒</option></select>
+        <button id="btnRecord" data-ctl>录像并校验</button>
+        <button id="btnReset" data-ctl class="small">计数清零</button>
+      </div>
+      <p class="hint">录像格式：每帧 48 字节帧头 + 图像 + CRC32。录完自动运行 verify_record.py 校验。</p>
+    </div>
+  </section>
+
+  <!-- 中：画面与状态 -->
+  <section class="col wide">
+    <div class="panel view">
+      <div class="screen">
+        <img id="preview" alt="相机实时画面">
+        <div class="osd tl"><b id="osdState">—</b></div>
+        <div class="osd tr" id="osdFps">— fps</div>
+        <div class="osd bl" id="osdId">frame —</div>
+        <div class="osd br" id="osdRes">—</div>
+        <div class="nosig" id="nosig" hidden>无信号</div>
+      </div>
+      <ol class="states" id="states">
+        <li data-s="Idle">空闲</li><li data-s="Connecting">连接中</li><li data-s="Ready">已就绪</li><li data-s="Acquiring">采集中</li><li data-s="Error">出错</li>
+      </ol>
+      <p class="statenote" id="stateNote">—</p>
+    </div>
+
+    <div class="panel">
+      <div class="ph"><h2>最近 60 秒</h2><span class="legend"><i class="l1"></i>完整帧/秒 <i class="l2"></i>坏帧/秒 <i class="l3"></i>帧号缺口/秒</span></div>
+      <canvas id="chart" height="150" aria-label="帧率曲线"></canvas>
+    </div>
+
+    <div class="panel">
+      <div class="ph"><h2>录像校验</h2></div>
+      <div id="verify" class="verify"><p class="hint">还没有录像。开始采集后点「录像并校验」。</p></div>
+    </div>
+  </section>
+
+  <!-- 右：故障注入与丢帧漏斗 -->
+  <section class="col">
+    <div class="panel">
+      <div class="ph"><h2>④ 故障注入</h2><button id="btnDefaults" data-ctl class="small">恢复默认</button></div>
+      <div class="fault">
+        <div class="fh"><b>网线</b><span class="hint" id="cableCam">当前相机</span></div>
+        <button id="btnCable" data-ctl>拔掉网线</button>
+        <p class="hint">结束虚拟相机进程。采集端 2 秒内发现，按 100 → 200 → 400 ms… 指数退避重连。</p>
+      </div>
+      <div class="fault">
+        <div class="fh"><b>网络丢包</b><output id="lossOut">0‰</output></div>
+        <div class="seg" id="lossSeg">
+          <button data-ctl data-loss="0">0</button><button data-ctl data-loss="1">0.1%</button><button data-ctl data-loss="5">0.5%</button><button data-ctl data-loss="20">2%</button><button data-ctl data-loss="50">5%</button>
+        </div>
+        <p class="hint">虚拟相机按比例随机丢弃 GVSP 包（需要重启相机，约 1 秒后自动重连）。</p>
+      </div>
+      <div class="fault">
+        <div class="fh"><b>取帧线程变慢</b><output id="procOut">0 ms</output></div>
+        <input type="range" id="procRange" min="0" max="100" step="10" value="0" data-ctl aria-label="取帧线程每帧额外耗时">
+        <p class="hint">每帧额外耗时。SDK 缓冲还得慢 → 没有空缓冲（underrun）→ 整帧丢失。</p>
+      </div>
+      <div class="fault">
+        <div class="fh"><b>磁盘变慢</b><output id="diskOut">0 ms</output></div>
+        <input type="range" id="diskRange" min="0" max="100" step="10" value="0" data-ctl aria-label="写盘每帧额外耗时">
+        <p class="hint">录像时每帧写盘额外耗时。队列（64 帧）满了就丢帧计数，取帧不受影响。</p>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="ph"><h2>⑤ 丢帧漏斗</h2><span class="hint">累计 · 最近 1 秒</span></div>
+      <ol class="funnel" id="funnel"></ol>
+      <div class="diag" id="diag"></div>
+    </div>
+
+    <div class="panel">
+      <div class="ph"><h2>日志</h2></div>
+      <ul class="log" id="log"></ul>
+    </div>
+  </section>
+</main>
+
+<footer class="foot">
+  ai-cam · 相机为 Aravis 虚拟设备，画面是相机自带的测试图案 ·
+  <a href="https://github.com/rfs151/ai-cam/blob/main/docs/cam_demo开发手册.md" target="_blank" rel="noopener">开发手册</a>
+</footer>
+<script src="/static/app.js"></script>
+</body>
+</html>

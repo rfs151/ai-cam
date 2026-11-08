@@ -46,6 +46,8 @@ public:
         if (th_.joinable()) th_.join();
     }
     RecorderStats& stats() { return st_; }
+    void set_slow_disk_us(int us) { slow_us_ = us; }   // 录像过程中也可以调整
+    int file_count() const { return file_idx_; }       // join() 之后读取：写了几个文件
 
 private:
     void open_next() {
@@ -99,8 +101,8 @@ private:
                 std::fwrite(&h, sizeof(h), 1, fp_);
                 std::fwrite(f->data.data(), 1, f->size, fp_);
             }
-            if (slow_us_ > 0)  // 模拟慢磁盘，用于演示背压和丢帧
-                std::this_thread::sleep_for(std::chrono::microseconds(slow_us_));
+            if (int slow = slow_us_.load(); slow > 0)  // 模拟慢磁盘，用于演示背压和丢帧
+                std::this_thread::sleep_for(std::chrono::microseconds(slow));
             uint64_t us = (host_now_ns() - t0) / 1000;
             uint64_t prev = st_.max_write_us.load();
             while (us > prev && !st_.max_write_us.compare_exchange_weak(prev, us)) {}
@@ -123,7 +125,7 @@ private:
     BoundedQueue<FramePtr>& q_;
     std::string dir_;
     uint64_t roll_bytes_;
-    int slow_us_;
+    std::atomic<int> slow_us_;
     std::thread th_;
     std::FILE* fp_ = nullptr;
     int file_idx_ = 0;
